@@ -65,36 +65,30 @@ def maxbusinessdate(df):
 
 def csv_date_roullete_parse(df, datecol):
 
-  # sparkutils.get_spark sets spark.sql.ansi.enabled=true, under which
-  # cast('date') / to_date() THROW on a bad value instead of returning NULL --
-  # that kills the coalesce-fallback. So: normalise the known slash formats to
-  # an ISO string with pure regex (never throws), then try_cast (returns NULL on
-  # failure regardless of ANSI). Verified identical on jvm and sail.
-  #   handled: yyyy-M-d (ISO, loose) | d/M/yy | M/d/yy | d/M/yyyy | M/d/yyyy
-  raw = trim(col(datecol).cast('string'))
-  two_digit = r'^(\d{1,2})/(\d{1,2})/(\d{2})$'
-  four_digit = r'^(\d{1,2})/(\d{1,2})/(\d{4})$'
-  dmy = regexp_replace(regexp_replace(raw, two_digit, r'20$3-$2-$1'), four_digit, r'$3-$2-$1')
-  mdy = regexp_replace(regexp_replace(raw, two_digit, r'20$3-$1-$2'), four_digit, r'$3-$1-$2')
+  # try_to_timestamp()/try_cast() never throw under spark.sql.ansi.enabled=true
+  # (which sparkutils.get_spark() sets), unlike bare cast()/to_date(). Default
+  # roulette parser - one format string per candidate shape, tried in dmy -> mdy
+  # -> ymd priority order (coalesce takes the first non-null).
+  format_order = [
+      "yyyy-M-d",   # ISO-ish
+      'd/M/yy',     # dmy, 2-digit year
+      'd/M/yyyy',   # dmy, 4-digit year
+      'M/d/yy',     # mdy, 2-digit year
+      'M/d/yyyy',   # mdy, 4-digit year
+      'yy/M/d',     # ymd, 2-digit year
+      'yyyy/M/d',   # ymd, 4-digit year
+  ]
+  date_attempts = [try_to_timestamp(col(datecol), lit(f)).cast('date') for f in format_order]
 
-  df_cleaned = (df
-      .withColumn('_rl_raw', raw)
-      .withColumn('_rl_dmy', dmy)
-      .withColumn('_rl_mdy', mdy)
-      .withColumn('date_cleaned', coalesce(
-          expr('try_cast(_rl_raw as date)'),   # already ISO / real date type
-          expr('try_cast(_rl_dmy as date)'),   # d/M/y  -- tried first, as before
-          expr('try_cast(_rl_mdy as date)'),   # M/d/y  -- fallback
-      ))
-      .drop('_rl_raw', '_rl_dmy', '_rl_mdy')
-  )
+  df_cleaned = df.withColumn(
+        "date_cleaned",
+        coalesce(col(datecol).try_cast('date'), *date_attempts)
+    )
   dc.showcol(df_cleaned, 'date_cleaned')
 
   dc.nullpcnt(df_cleaned, 'date_cleaned')
 
   if dc.nullindicator==1:
-      print('check')
-      df_cleaned.filter(col('date_cleaned').isNull()).show()
       raise Exception('date parsed returned some nulls, break!')
 
   wrong_year = df_cleaned.filter(year(col('date_cleaned'))<=1990)
@@ -113,20 +107,37 @@ def csv_date_roullete_parse(df, datecol):
   return df_cleaned
 
 
-def csv_date_roullete_parse_old(df, datecol):
+def csv_date_roulette_parse_strict(df, datecol):
 
-  # 1. Define your "Suspect" formats
-  # Note: Use 'yyyy' for 4-digit years and 'y' or 'yy' for 2-digit.
-  format_order = ["yyyy-M-d", 'd/M/yy', 'M/d/yy']
-  # , "dd/MM/yyyy"
-  # 2. Build a list of to_date expressions
-  date_attempts = [to_date(datecol, f) for f in format_order]
+  # sparkutils.get_spark sets spark.sql.ansi.enabled=true, under which
+  # cast('date') / to_date() THROW on a bad value instead of returning NULL --
+  # that kills the coalesce-fallback. So: normalise the known slash formats to
+  # an ISO string with pure regex (never throws), then try_cast (returns NULL on
+  # failure regardless of ANSI). Verified identical on jvm and sail.
+  #   handled: yyyy-M-d (ISO, loose) | d/M/yy | M/d/yy | d/M/yyyy | M/d/yyyy
+  #   | yy/M/d | yyyy/M/d
+  raw = trim(col(datecol).cast('string'))
+  two_digit = r'^(\d{1,2})/(\d{1,2})/(\d{2})$'
+  four_digit = r'^(\d{1,2})/(\d{1,2})/(\d{4})$'
+  dmy = regexp_replace(regexp_replace(raw, two_digit, r'20$3-$2-$1'), four_digit, r'$3-$2-$1')
+  mdy = regexp_replace(regexp_replace(raw, two_digit, r'20$3-$1-$2'), four_digit, r'$3-$1-$2')
 
-  # 3. Use coalesce to pick the first one that doesn't return null
-  # We also include the original column cast to Date in case it's already a Date type
-  df_cleaned = df.withColumn(
-      "date_cleaned",
-      coalesce(col(datecol).cast('date'), *date_attempts)
+  two_digit_ymd = r'^(\d{2})/(\d{1,2})/(\d{1,2})$'
+  four_digit_ymd = r'^(\d{4})/(\d{1,2})/(\d{1,2})$'
+  ymd = regexp_replace(regexp_replace(raw, two_digit_ymd, r'20$1-$2-$3'), four_digit_ymd, r'$1-$2-$3')
+
+  df_cleaned = (df
+      .withColumn('_rl_raw', raw)
+      .withColumn('_rl_dmy', dmy)
+      .withColumn('_rl_mdy', mdy)
+      .withColumn('_rl_ymd', ymd)
+      .withColumn('date_cleaned', coalesce(
+          expr('try_cast(_rl_raw as date)'),   # already ISO / real date type
+          expr('try_cast(_rl_dmy as date)'),   # d/M/y  -- tried first, as before
+          expr('try_cast(_rl_mdy as date)'),   # M/d/y  -- fallback
+          expr('try_cast(_rl_ymd as date)'),   # y/M/d  -- fallback, same priority as csv_date_roullete_parse
+      ))
+      .drop('_rl_raw', '_rl_dmy', '_rl_mdy', '_rl_ymd')
   )
   dc.showcol(df_cleaned, 'date_cleaned')
 
