@@ -63,6 +63,31 @@ def spark_write_csv(df, filepath):
     pd_df.to_csv(filepath, index=False)
 
 
+def write_csv_safe(df, filepath):
+    # .coalesce(1) does NOT reliably collapse to one output file under Sail
+    # when the upstream plan includes a window function - confirmed live,
+    # corrupted a real annotation csv down to a fraction of its rows before
+    # being caught. Always glob every part-*.csv, concatenate in sorted
+    # order, keep the first file's header, drop the rest. Pandas-free.
+    import glob
+    import shutil
+
+    tmp_dir = f'{filepath}.spark_tmp'
+    df.coalesce(1).write.mode('overwrite').option('header', True).csv(tmp_dir)
+
+    part_files = sorted(glob.glob(f'{tmp_dir}/part-*.csv'))
+    if not part_files:
+        raise Exception(f'no part-*.csv files found in {tmp_dir} after write')
+
+    with open(filepath, 'w') as out:
+        for i, part in enumerate(part_files):
+            with open(part) as f:
+                lines = f.readlines()
+            out.writelines(lines if i == 0 else lines[1:])
+
+    shutil.rmtree(tmp_dir)
+
+
 # def write_csv(sparkdf, csvpath):
 #     tic()
 #     cdsw_csvpath = '/home/cdsw/' + csvpath 

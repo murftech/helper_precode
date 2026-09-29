@@ -110,9 +110,9 @@ def refresh_rows_user_actions(newdata, mnl_data, prikey, user_given_fields, refr
     if refresh_now == 'y':
         if refreshpath is None:
             raise ValueError("refresh_now='y' but no refreshpath given -- pass refreshpath=... so the csv can be written back")
-        print('replace = yes given, hence update spark_write_csv done at the same time`')
+        print('replace = yes given, hence update write_csv_safe done at the same time`')
         timestamp_duplicate(refreshpath)
-        rw.spark_write_csv(refreshed_data, refreshpath)
+        rw.write_csv_safe(refreshed_data, refreshpath)
 
     return refreshed_data
 
