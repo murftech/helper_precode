@@ -1,0 +1,17 @@
+[project]
+name = "precode"
+version = "0.1.0"
+description = "Shared precode helpers (dr/dc/rw/ds wrappers) pulled out of my-massive-app and my-massive-diary's separately-drifted precode copies"
+requires-python = ">=3.12"
+dependencies = [
+    "python-dateutil",
+]
+# pyspark comes from whatever project installs this, not from here (same
+# convention as sparkutils/lakehouse_io).
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["precode"]
