@@ -48,7 +48,7 @@ def stringread_csv(filepath):
     return bb
     
 
-    
+
 
 def spark_write_csv(df, filepath):
     import sys
@@ -63,32 +63,27 @@ def spark_write_csv(df, filepath):
     pd_df.to_csv(filepath, index=False)
 
 
-def write_csv_safe(df, filepath):
-    # .coalesce(1) does NOT reliably collapse to one output file under Sail
-    # when the upstream plan includes a window function - confirmed live,
-    # corrupted a real annotation csv down to a fraction of its rows before
-    # being caught. Always glob every csv file written, concatenate in sorted
-    # order, keep the first file's header, drop the rest. Pandas-free.
-    # NOTE: don't glob 'part-*.csv' - that's JVM Spark's naming convention.
-    # Sail names its output files differently (e.g. 'WRItiW4O03F0obM4_0.csv',
-    # no 'part-' prefix at all) - glob '*.csv' so this works on both engines.
-    import glob
-    import shutil
+def write_csv_safe(df, filepath, null_value='', *, orderby=None, backup=False):
+    import os
+    import polars as pl
 
-    tmp_dir = f'{filepath}.spark_tmp'
-    df.coalesce(1).write.mode('overwrite').option('header', True).csv(tmp_dir)
+    if backup:
+        # local import: pre_user_action_refresh imports this module (circular otherwise)
+        from precode.pre_user_action_refresh import timestamp_duplicate
+        if os.path.exists(filepath):
+            timestamp_duplicate(filepath)
+        else:
+            print(f'[write_csv_safe] {filepath} does not exist yet - nothing to back up')
 
-    part_files = sorted(glob.glob(f'{tmp_dir}/*.csv'))
-    if not part_files:
-        raise Exception(f'no csv files found in {tmp_dir} after write')
+    if orderby is not None:
+        df = df.orderBy(orderby)
 
-    with open(filepath, 'w') as out:
-        for i, part in enumerate(part_files):
-            with open(part) as f:
-                lines = f.readlines()
-            out.writelines(lines if i == 0 else lines[1:])
-
-    shutil.rmtree(tmp_dir)
+    pl_df = pl.from_arrow(df.toArrow())
+    pl_df.write_csv(
+        filepath,
+        null_value = null_value,
+        datetime_format='%Y-%m-%d %H:%M:%S',
+    )
 
 
 # def write_csv(sparkdf, csvpath):

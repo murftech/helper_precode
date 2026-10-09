@@ -88,8 +88,15 @@ def csv_date_roullete_parse(df, datecol):
 
   dc.nullpcnt(df_cleaned, 'date_cleaned')
 
-  if dc.nullindicator==1:
-      raise Exception('date parsed returned some nulls, break!')
+  # a null date_cleaned is only a real problem if datecol actually HAD a value -
+  # an already-blank input (a not-yet-annotated row, common for an optional
+  # field) is expected and fine. Only raise for "had a value, none of the 7
+  # formats matched it" - a genuinely garbled/typo'd date worth stopping for.
+  real_failures = df_cleaned.filter(col(datecol).isNotNull() & col('date_cleaned').isNull())
+  n_real_failures = real_failures.count()
+  if n_real_failures > 0:
+      dc.showcol(real_failures, datecol)
+      raise Exception(f'{n_real_failures} row(s) had a {datecol} value that failed to parse against every format - break!')
 
   wrong_year = df_cleaned.filter(year(col('date_cleaned'))<=1990)
   if wrong_year.count() != 0:
@@ -143,10 +150,15 @@ def csv_date_roulette_parse_strict(df, datecol):
 
   dc.nullpcnt(df_cleaned, 'date_cleaned')
 
-  if dc.nullindicator==1:
-      print('check')
-      df_cleaned.filter(col('date_cleaned').isNull()).show()
-      raise Exception('date parsed returned some nulls, break!')
+  # same fix as csv_date_roullete_parse: a null date_cleaned is only a real
+  # problem if datecol actually HAD a value - an already-blank input (a
+  # not-yet-annotated row, common for an optional field) is expected and fine.
+  # Only raise for "had a value, none of the 4 formats matched it".
+  real_failures = df_cleaned.filter(col(datecol).isNotNull() & col('date_cleaned').isNull())
+  n_real_failures = real_failures.count()
+  if n_real_failures > 0:
+      dc.showcol(real_failures, datecol)
+      raise Exception(f'{n_real_failures} row(s) had a {datecol} value that failed to parse against every format - break!')
 
   wrong_year = df_cleaned.filter(year(col('date_cleaned'))<=1990)
   if wrong_year.count() != 0:
